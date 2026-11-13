@@ -351,11 +351,31 @@ function recordDexDiscoveries(data) {
 
 function loadImageAndRun(url) {
   const img = new Image();
-  img.crossOrigin = 'anonymous';
+  if (!url.startsWith('data:') && !url.startsWith('blob:')) {
+    img.crossOrigin = 'anonymous';
+  }
   img.onload = () => {
     runInferenceOnSource(img, img.naturalWidth, img.naturalHeight);
   };
+  img.onerror = () => {
+    state.lastResult = { error: 'Could not load that image. Try another photo or sample.' };
+    renderResultStrip();
+  };
   img.src = url;
+}
+
+function loadFileAndRun(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (typeof reader.result === 'string') {
+      loadImageAndRun(reader.result);
+    }
+  };
+  reader.onerror = () => {
+    state.lastResult = { error: 'Could not read the selected file.' };
+    renderResultStrip();
+  };
+  reader.readAsDataURL(file);
 }
 
 function syncCanvasOverlay() {
@@ -629,8 +649,16 @@ function renderQuestCard() {
     if (state.questIndex < QUESTS.length - 1) {
       state.questIndex += 1;
       state.lastFeedback = null;
+      state.frozenUrl = null;
+      state.lastResult = null;
+      state.lastElapsedMs = null;
+      state.selectedObjectId = null;
       saveProgress();
       renderQuestCard();
+      renderStage();
+      renderResultStrip();
+      renderBottomDock();
+      startCamera();
     } else {
       state.mode = 'sandbox';
       state.lastFeedback = null;
@@ -786,9 +814,9 @@ function renderBottomDock() {
 
   document.getElementById('photo-upload-input')?.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    loadImageAndRun(url, true);
+    loadFileAndRun(file);
   });
 
   document.getElementById('shutter-btn')?.addEventListener('click', () => {
@@ -835,6 +863,7 @@ function resetJourney() {
   closeSheet();
   renderHeader();
   renderQuestCard();
+  renderStage();
   renderResultStrip();
   renderBottomDock();
   startCamera();
