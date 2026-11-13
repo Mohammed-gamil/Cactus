@@ -227,7 +227,7 @@ function stopCamera() {
 }
 
 function extractRgbFromSource(sourceEl, srcW, srcH) {
-  const maxDim = 512;
+  const maxDim = 320;
   const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
   const w = Math.max(32, Math.round(srcW * scale));
   const h = Math.max(32, Math.round(srcH * scale));
@@ -246,7 +246,7 @@ function extractRgbFromSource(sourceEl, srcW, srcH) {
     rgb[j + 2] = imgData[i + 2];
   }
 
-  return { rgb, width: w, height: h, previewDataUrl: offscreen.toDataURL('image/jpeg', 0.9) };
+  return { rgb, width: w, height: h, previewDataUrl: offscreen.toDataURL('image/jpeg', 0.85) };
 }
 
 async function runInferenceOnSource(sourceEl, srcW, srcH) {
@@ -254,6 +254,7 @@ async function runInferenceOnSource(sourceEl, srcW, srcH) {
   state.inferring = true;
   state.selectedObjectId = null;
   state.lastFeedback = null;
+  inferStartTime = performance.now();
 
   const { rgb, width, height, previewDataUrl } = extractRgbFromSource(sourceEl, srcW, srcH);
 
@@ -262,6 +263,18 @@ async function runInferenceOnSource(sourceEl, srcW, srcH) {
   state.frozenUrl = previewDataUrl;
   renderStage();
   renderBottomDock();
+
+  clearInferTimers();
+  inferTimerInterval = setInterval(() => {
+    const pill = document.getElementById('infer-timer-pill');
+    if (pill) {
+      const sec = ((performance.now() - inferStartTime) / 1000).toFixed(1);
+      pill.textContent = `Scanning ${sec}s`;
+    }
+  }, 150);
+  inferTimeout = setTimeout(() => {
+    cancelInference('Scan timed out after 45s — try better lighting or a closer shot');
+  }, 45000);
 
   const id = ++reqId;
   const resultPromise = new Promise((resolve) => pending.set(id, resolve));
@@ -273,12 +286,13 @@ async function runInferenceOnSource(sourceEl, srcW, srcH) {
       width,
       height,
       language: state.language,
-      options: { conf: 0.25, text_conf: 0.25, max_objects: 12, max_text_lines: 12 },
+      options: { conf: 0.25, text_conf: 0.25, max_objects: 8, max_text_lines: 8, max_tokens: 160 },
     },
     [rgb.buffer]
   );
 
   const res = await resultPromise;
+  clearInferTimers();
   state.inferring = false;
 
   if (res.error) {
@@ -477,6 +491,24 @@ function render() {
   window.addEventListener('resize', syncCanvasOverlay);
 }
 
+function offloadMirage() {
+  clearInferTimers();
+  pending.clear();
+  stopCamera();
+  if (worker) {
+    worker.terminate();
+    worker = null;
+  }
+  state.inferring = false;
+  state.engineReady = false;
+  state.engineLoading = false;
+  state.frozenUrl = null;
+  state.lastResult = null;
+  state.selectedObjectId = null;
+  createWorker();
+  render();
+}
+
 function headerHTML() {
   const dexCount = Object.keys(state.dex).length;
   return `
@@ -492,6 +524,11 @@ function headerHTML() {
       <div class="hud-actions">
         <span class="xp-pill" id="xp-pill">${state.xp} XP</span>
         <button id="dex-btn" class="icon-btn" type="button" title="Field Dex">Dex (${dexCount})</button>
+        ${
+          state.engineReady
+            ? `<button id="offload-btn" class="icon-btn" type="button" title="Free model memory">Offload</button>`
+            : ''
+        }
         <select id="lang-select" class="lang-select" aria-label="Output language">
           ${LANGUAGES.map((l) => `<option value="${l.code}" ${l.code === state.language ? 'selected' : ''}>${l.label}</option>`).join('')}
         </select>
@@ -509,6 +546,7 @@ function renderHeader() {
 
 function bindHeaderEvents() {
   document.getElementById('dex-btn')?.addEventListener('click', () => openSheet('dex'));
+  document.getElementById('offload-btn')?.addEventListener('click', offloadMirage);
   document.getElementById('lang-select')?.addEventListener('change', (e) => {
     state.language = e.target.value;
   });
@@ -750,7 +788,7 @@ function renderBottomDock() {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    loadImageAndRun(url);
+    loadImageAndRun(url, true);
   });
 
   document.getElementById('shutter-btn')?.addEventListener('click', () => {

@@ -45,7 +45,8 @@ async function fetchWeightsWithProgress() {
     }
   }
 
-  const total = Number(response.headers.get('content-length')) || 21611043;
+  const contentLen = Number(response.headers.get('content-length')) || 0;
+  const total = contentLen || 21611043;
 
   if (!response.body) {
     const buf = await response.arrayBuffer();
@@ -54,22 +55,37 @@ async function fetchWeightsWithProgress() {
   }
 
   const reader = response.body.getReader();
-  const chunks = [];
+  let merged = contentLen > 0 ? new Uint8Array(contentLen) : null;
+  const chunks = merged ? null : [];
   let loaded = 0;
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
+    if (merged && loaded + value.byteLength <= merged.byteLength) {
+      merged.set(value, loaded);
+    } else if (merged) {
+      // Content-Length was smaller than actual body; fall back to growing
+      const grown = new Uint8Array(loaded + value.byteLength);
+      grown.set(merged.subarray(0, loaded), 0);
+      grown.set(value, loaded);
+      merged = grown;
+    } else {
+      chunks.push(value);
+    }
     loaded += value.byteLength;
     self.postMessage({ type: 'progress', phase: 'downloading', loaded, total });
   }
 
-  const merged = new Uint8Array(loaded);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
+  if (!merged) {
+    merged = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+  } else if (loaded < merged.byteLength) {
+    merged = merged.subarray(0, loaded);
   }
 
   if (cache) {
@@ -89,6 +105,11 @@ async function fetchWeightsWithProgress() {
   return merged;
 }
 
+const OUT_CAPACITY = 131072;
+let persistentOutPtr = 0;
+let persistentRgbPtr = 0;
+let persistentRgbCap = 0;
+
 async function initEngine() {
   if (isReady) {
     self.postMessage({ type: 'ready', cached: true });
@@ -104,15 +125,17 @@ async function initEngine() {
     if (!jsRes.ok) throw new Error(`Failed to load cactus.js (${jsRes.status})`);
     if (!wasmRes.ok) throw new Error(`Failed to load cactus.wasm (${wasmRes.status})`);
 
-    const [jsCode, wasmBinary] = await Promise.all([
+    let [jsCode, wasmBinary] = await Promise.all([
       jsRes.text(),
       wasmRes.arrayBuffer(),
     ]);
     const factory = new Function(jsCode + '\nreturn createCactus;')();
+    jsCode = null;
 
     cactusModule = await factory({ wasmBinary });
+    wasmBinary = null;
 
-    const weights = await fetchWeightsWithProgress();
+    let weights = await fetchWeightsWithProgress();
 
     self.postMessage({ type: 'progress', phase: 'mounting', loaded: 1, total: 1 });
     const ptr = cactusModule._malloc(weights.byteLength);
@@ -125,7 +148,13 @@ async function initEngine() {
       }
     } finally {
       cactusModule._free(ptr);
+      weights = null;
     }
+
+    // Preallocate reusable scratch buffers so inferences never fragment WASM heap
+    persistentOutPtr = cactusModule._malloc(OUT_CAPACITY);
+    persistentRgbCap = 320 * 320 * 3;
+    persistentRgbPtr = cactusModule._malloc(persistentRgbCap);
 
     isReady = true;
     self.postMessage({ type: 'ready', models: cactusModule._cactus_models() });
@@ -142,16 +171,16 @@ function runDescribe({ id, rgbBuffer, width, height, language = 'en', options = 
 
   const m = cactusModule;
   const rgb = new Uint8Array(rgbBuffer);
-  const outCap = 131072;
-  let rgbPtr = 0;
-  let outPtr = 0;
   let optsPtr = 0;
   let langPtr = 0;
 
   try {
-    rgbPtr = m._malloc(rgb.byteLength);
-    m.HEAPU8.set(rgb, rgbPtr);
-    outPtr = m._malloc(outCap);
+    if (rgb.byteLength > persistentRgbCap) {
+      if (persistentRgbPtr) m._free(persistentRgbPtr);
+      persistentRgbCap = rgb.byteLength;
+      persistentRgbPtr = m._malloc(persistentRgbCap);
+    }
+    m.HEAPU8.set(rgb, persistentRgbPtr);
 
     if (options) {
       optsPtr = allocString(m, JSON.stringify(options));
@@ -161,7 +190,7 @@ function runDescribe({ id, rgbBuffer, width, height, language = 'en', options = 
     }
 
     const t0 = performance.now();
-    const rc = m._cactus_describe(rgbPtr, width, height, optsPtr, langPtr, 0, outPtr, outCap);
+    const rc = m._cactus_describe(persistentRgbPtr, width, height, optsPtr, langPtr, 0, persistentOutPtr, OUT_CAPACITY);
     const elapsedMs = Math.round(performance.now() - t0);
 
     if (rc < 0) {
@@ -170,7 +199,7 @@ function runDescribe({ id, rgbBuffer, width, height, language = 'en', options = 
       return;
     }
 
-    const raw = m.UTF8ToString(outPtr);
+    const raw = m.UTF8ToString(persistentOutPtr);
     let data;
     try {
       data = JSON.parse(raw);
@@ -178,12 +207,14 @@ function runDescribe({ id, rgbBuffer, width, height, language = 'en', options = 
       data = { raw };
     }
 
+    if (typeof m._cactus_reset === 'function') {
+      m._cactus_reset();
+    }
+
     self.postMessage({ type: 'result', id, data, elapsedMs });
   } catch (err) {
     self.postMessage({ type: 'result', id, error: err?.message || String(err) });
   } finally {
-    if (rgbPtr) m._free(rgbPtr);
-    if (outPtr) m._free(outPtr);
     if (optsPtr) m._free(optsPtr);
     if (langPtr) m._free(langPtr);
   }
