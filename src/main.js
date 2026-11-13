@@ -823,6 +823,10 @@ function resetJourney() {
   state.dex = {};
   state.mode = 'quest';
   state.lastFeedback = null;
+  state.frozenUrl = null;
+  state.lastResult = null;
+  state.lastElapsedMs = null;
+  state.selectedObjectId = null;
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch {
@@ -831,6 +835,9 @@ function resetJourney() {
   closeSheet();
   renderHeader();
   renderQuestCard();
+  renderResultStrip();
+  renderBottomDock();
+  startCamera();
 }
 
 function openSheet(type) {
