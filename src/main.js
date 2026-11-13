@@ -252,6 +252,8 @@ function extractRgbFromSource(sourceEl, srcW, srcH) {
 async function runInferenceOnSource(sourceEl, srcW, srcH) {
   if (!state.engineReady || state.inferring) return;
   state.inferring = true;
+  state.lastResult = null;
+  state.lastElapsedMs = null;
   state.selectedObjectId = null;
   state.lastFeedback = null;
   inferStartTime = performance.now();
@@ -989,5 +991,12 @@ function escapeHtml(str) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.engineReady) {
+    renderStage();
+    renderBottomDock();
+  }
+});
 
 render();
