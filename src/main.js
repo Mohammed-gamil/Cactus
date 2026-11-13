@@ -816,6 +816,23 @@ function renderBottomDock() {
   });
 }
 
+function resetJourney() {
+  state.xp = 0;
+  state.questIndex = 0;
+  state.completedQuests = [];
+  state.dex = {};
+  state.mode = 'quest';
+  state.lastFeedback = null;
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+  closeSheet();
+  renderHeader();
+  renderQuestCard();
+}
+
 function openSheet(type) {
   state.openSheet = type;
   const backdrop = document.getElementById('sheet-backdrop');
@@ -826,7 +843,7 @@ function openSheet(type) {
   if (type === 'dex') {
     title.textContent = `Field Dex (${Object.keys(state.dex).length})`;
     const entries = Object.values(state.dex).sort((a, b) => b.bestScore - a.bestScore);
-    body.innerHTML =
+    const listHTML =
       entries.length === 0
         ? `<div class="detail-block"><p>No objects cataloged yet. Scan something to start your collection!</p></div>`
         : `<div class="dex-grid">
@@ -842,6 +859,18 @@ function openSheet(type) {
               )
               .join('')}
           </div>`;
+
+    body.innerHTML = `
+      ${listHTML}
+      <div class="detail-block" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <div>
+          <h3>Journey Progress</h3>
+          <p>${state.completedQuests.length}/${QUESTS.length} quests · ${state.xp} XP</p>
+        </div>
+        <button id="reset-journey-btn" class="icon-btn" type="button" style="color:#9A3412;border-color:rgba(217,107,39,0.35);">Reset Journey</button>
+      </div>
+    `;
+    document.getElementById('reset-journey-btn')?.addEventListener('click', resetJourney);
   } else {
     title.textContent = 'Mirage Perception Record';
     const d = state.lastResult || {};
