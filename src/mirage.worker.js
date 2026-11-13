@@ -1,4 +1,5 @@
-const MODEL_URL = 'https://huggingface.co/Cactus-Compute/mirage/resolve/main/mirage.cact';
+const LOCAL_MODEL_URL = '/models/mirage.cact';
+const HF_MODEL_URL = 'https://huggingface.co/Cactus-Compute/mirage/resolve/main/mirage.cact';
 const CACHE_NAME = 'mirage-weights-v1';
 
 let cactusModule = null;
@@ -17,19 +18,31 @@ async function fetchWeightsWithProgress() {
   let cache = null;
   try {
     cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(MODEL_URL);
+    const cached = (await cache.match(LOCAL_MODEL_URL)) || (await cache.match(HF_MODEL_URL));
     if (cached) {
       self.postMessage({ type: 'progress', phase: 'cached', loaded: 1, total: 1 });
       const buf = await cached.arrayBuffer();
       return new Uint8Array(buf);
     }
   } catch {
-    // Cache API may be unavailable in some private browsing contexts; fall back to direct fetch
+    // Cache API may be unavailable in some private browsing contexts
   }
 
-  const response = await fetch(MODEL_URL, { mode: 'cors' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch Mirage weights (${response.status})`);
+  let response = null;
+  let usedUrl = LOCAL_MODEL_URL;
+  try {
+    response = await fetch(LOCAL_MODEL_URL);
+    if (!response.ok) response = null;
+  } catch {
+    response = null;
+  }
+
+  if (!response) {
+    usedUrl = HF_MODEL_URL;
+    response = await fetch(HF_MODEL_URL, { mode: 'cors' });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Mirage weights (${response.status})`);
+    }
   }
 
   const total = Number(response.headers.get('content-length')) || 21611043;
@@ -62,7 +75,7 @@ async function fetchWeightsWithProgress() {
   if (cache) {
     try {
       await cache.put(
-        MODEL_URL,
+        usedUrl,
         new Response(merged, {
           status: 200,
           headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(merged.byteLength) },
