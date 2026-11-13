@@ -1,0 +1,10 @@
+{
+  "name": "Mirage Quest",
+  "short_name": "Mirage",
+  "description": "Phone-first on-device vision game powered by Cactus Compute Mirage (22MB WASM).",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF7F2",
+  "theme_color": "#FAF7F2",
+  "orientation": "portrait"
+}
