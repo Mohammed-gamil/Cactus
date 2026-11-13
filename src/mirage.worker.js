@@ -84,14 +84,20 @@ async function initEngine() {
 
   try {
     self.postMessage({ type: 'progress', phase: 'wasm', loaded: 0, total: 1 });
-    const jsRes = await fetch('/wasm/cactus.js');
-    if (!jsRes.ok) throw new Error('Failed to load cactus.js');
-    const jsCode = await jsRes.text();
+    const [jsRes, wasmRes] = await Promise.all([
+      fetch('/wasm/cactus.js'),
+      fetch('/wasm/cactus.wasm'),
+    ]);
+    if (!jsRes.ok) throw new Error(`Failed to load cactus.js (${jsRes.status})`);
+    if (!wasmRes.ok) throw new Error(`Failed to load cactus.wasm (${wasmRes.status})`);
+
+    const [jsCode, wasmBinary] = await Promise.all([
+      jsRes.text(),
+      wasmRes.arrayBuffer(),
+    ]);
     const factory = new Function(jsCode + '\nreturn createCactus;')();
 
-    cactusModule = await factory({
-      locateFile: (path) => `/wasm/${path}`,
-    });
+    cactusModule = await factory({ wasmBinary });
 
     const weights = await fetchWeightsWithProgress();
 
