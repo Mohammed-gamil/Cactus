@@ -60,54 +60,112 @@ const state = {
   openSheet: null, // 'inspect' | 'dex' | null
 };
 
-const worker = new Worker(new URL('./mirage.worker.js', import.meta.url), { type: 'module' });
+let worker = null;
 let reqId = 0;
 const pending = new Map();
+let inferTimerInterval = null;
+let inferTimeout = null;
+let inferStartTime = 0;
 
-worker.onmessage = (e) => {
-  const msg = e.data;
-  if (msg.type === 'progress') {
-    state.loadPhase = msg.phase;
-    if (msg.phase === 'wasm') {
-      state.loadPct = 8;
-      state.loadLabel = 'Loading WebAssembly engine (1.2 MB)...';
-    } else if (msg.phase === 'cached') {
-      state.loadPct = 85;
-      state.loadLabel = 'Found cached weights on device...';
-    } else if (msg.phase === 'downloading') {
-      const mbLoaded = (msg.loaded / 1048576).toFixed(1);
-      const mbTotal = (msg.total / 1048576).toFixed(1);
-      const ratio = msg.total > 0 ? msg.loaded / msg.total : 0;
-      state.loadPct = Math.min(92, Math.round(10 + ratio * 82));
-      state.loadLabel = `Downloading Mirage (${mbLoaded} / ${mbTotal} MB)...`;
-    } else if (msg.phase === 'mounting') {
-      state.loadPct = 96;
-      state.loadLabel = 'Mounting 2-bit weights into memory...';
-    }
-    updateProgressUI();
-  } else if (msg.type === 'ready') {
-    state.engineReady = true;
-    state.engineLoading = false;
-    state.loadPct = 100;
-    render();
-    startCamera();
-  } else if (msg.type === 'error') {
-    state.engineLoading = false;
-    state.loadLabel = `Error: ${msg.message}`;
-    updateProgressUI();
-    const btn = document.getElementById('wake-btn');
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = 'Retry Awakening';
-    }
-  } else if (msg.type === 'result') {
-    const resolve = pending.get(msg.id);
-    if (resolve) {
-      pending.delete(msg.id);
-      resolve(msg);
-    }
+function createWorker() {
+  if (worker) {
+    worker.terminate();
   }
-};
+  worker = new Worker(new URL('./mirage.worker.js', import.meta.url), { type: 'module' });
+
+  worker.onerror = (err) => {
+    clearInferTimers();
+    if (state.inferring) {
+      state.inferring = false;
+      state.lastResult = { error: `Worker error: ${err.message || 'WASM crashed — tap LIVE to retry'}` };
+      pending.clear();
+      // Re-initialize worker in background
+      state.engineReady = false;
+      createWorker();
+      worker.postMessage({ type: 'init' });
+      renderStage();
+      renderResultStrip();
+      renderBottomDock();
+    } else if (state.engineLoading) {
+      state.engineLoading = false;
+      state.loadLabel = `Worker error: ${err.message || 'Failed to start'}`;
+      updateProgressUI();
+    }
+  };
+
+  worker.onmessage = (e) => {
+    const msg = e.data;
+    if (msg.type === 'progress') {
+      state.loadPhase = msg.phase;
+      if (msg.phase === 'wasm') {
+        state.loadPct = 8;
+        state.loadLabel = 'Loading WebAssembly engine (1.2 MB)...';
+      } else if (msg.phase === 'cached') {
+        state.loadPct = 85;
+        state.loadLabel = 'Found cached weights on device...';
+      } else if (msg.phase === 'downloading') {
+        const mbLoaded = (msg.loaded / 1048576).toFixed(1);
+        const mbTotal = (msg.total / 1048576).toFixed(1);
+        const ratio = msg.total > 0 ? msg.loaded / msg.total : 0;
+        state.loadPct = Math.min(92, Math.round(10 + ratio * 82));
+        state.loadLabel = `Downloading Mirage (${mbLoaded} / ${mbTotal} MB)...`;
+      } else if (msg.phase === 'mounting') {
+        state.loadPct = 96;
+        state.loadLabel = 'Mounting 2-bit weights into memory...';
+      }
+      updateProgressUI();
+    } else if (msg.type === 'ready') {
+      state.engineReady = true;
+      state.engineLoading = false;
+      state.loadPct = 100;
+      render();
+      if (!state.frozenUrl) startCamera();
+    } else if (msg.type === 'error') {
+      state.engineLoading = false;
+      state.loadLabel = `Error: ${msg.message}`;
+      updateProgressUI();
+      const btn = document.getElementById('wake-btn');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Retry Awakening';
+      }
+    } else if (msg.type === 'result') {
+      const resolve = pending.get(msg.id);
+      if (resolve) {
+        pending.delete(msg.id);
+        resolve(msg);
+      }
+    }
+  };
+}
+
+function clearInferTimers() {
+  if (inferTimerInterval) {
+    clearInterval(inferTimerInterval);
+    inferTimerInterval = null;
+  }
+  if (inferTimeout) {
+    clearTimeout(inferTimeout);
+    inferTimeout = null;
+  }
+}
+
+function cancelInference(reason = 'Scan cancelled') {
+  if (!state.inferring) return;
+  clearInferTimers();
+  pending.clear();
+  state.inferring = false;
+  state.lastResult = { error: reason };
+  // Restart worker cleanly so WASM memory/decoder is fresh
+  state.engineReady = false;
+  createWorker();
+  worker.postMessage({ type: 'init' });
+  renderStage();
+  renderResultStrip();
+  renderBottomDock();
+}
+
+createWorker();
 
 function wakeMirage() {
   if (state.engineLoading || state.engineReady) return;
@@ -677,8 +735,8 @@ function renderBottomDock() {
       </label>
     </div>
 
-    <button id="shutter-btn" class="shutter-btn ${isFrozen ? 'is-resume' : ''}" type="button" ${state.inferring ? 'disabled' : ''}>
-      <span class="shutter-core">${state.inferring ? '...' : isFrozen ? 'LIVE' : 'SCAN'}</span>
+    <button id="shutter-btn" class="shutter-btn ${isFrozen ? 'is-resume' : ''}" type="button">
+      <span class="shutter-core">${state.inferring ? 'STOP' : isFrozen ? 'LIVE' : 'SCAN'}</span>
     </button>
 
     <div class="dock-side right">
@@ -696,7 +754,10 @@ function renderBottomDock() {
   });
 
   document.getElementById('shutter-btn')?.addEventListener('click', () => {
-    if (state.inferring) return;
+    if (state.inferring) {
+      cancelInference('Scan stopped by user');
+      return;
+    }
     if (isFrozen) {
       startCamera();
       return;
