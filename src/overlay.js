@@ -79,7 +79,7 @@ export function renderOverlays(canvas, data, selectedObjectId = null) {
   // 2. Draw OCR text boxes
   texts.forEach((t) => {
     const box = t.bbox || t.box;
-    const str = (t.text || t.value || '').trim();
+    const str = (t.string || t.text || t.value || '').trim();
     if (!Array.isArray(box) || box.length !== 4 || !str) return;
 
     const scaleX = w / 1000;

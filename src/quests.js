@@ -32,7 +32,7 @@ export const QUESTS = [
     hint: 'Mirage includes a built-in CTC text reader that reads cropped regions locally.',
     sampleSuggestion: 'sign',
     check(data) {
-      const texts = Array.isArray(data?.text) ? data.text.filter((t) => (t.text || t.value || '').trim().length > 0) : [];
+      const texts = Array.isArray(data?.text) ? data.text.filter((t) => (t.string || t.text || t.value || '').trim().length > 0) : [];
       if (texts.length >= 1) {
         const words = texts.map((t) => `"${(t.text || t.value).trim()}"`).slice(0, 3).join(', ');
         return {
@@ -113,7 +113,7 @@ export const QUESTS = [
     sampleSuggestion: 'sign',
     check(data) {
       const objs = Array.isArray(data?.objects) ? data.objects : [];
-      const texts = Array.isArray(data?.text) ? data.text.filter((t) => (t.text || t.value || '').trim().length > 0) : [];
+      const texts = Array.isArray(data?.text) ? data.text.filter((t) => (t.string || t.text || t.value || '').trim().length > 0) : [];
       const rels = Array.isArray(data?.relations) ? data.relations : [];
       if (objs.length >= 1 && (texts.length >= 1 || rels.length >= 1)) {
         return {

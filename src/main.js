@@ -776,7 +776,7 @@ function openSheet(type) {
         texts.length
           ? `<div class="detail-block">
               <h3>OCR Text (${texts.length})</h3>
-              <p>${texts.map((t) => `"${escapeHtml(t.text || t.value || '')}"`).join(' · ')}</p>
+              <p>${texts.map((t) => `"${escapeHtml(t.string || t.text || t.value || '')}"`).join(' · ')}</p>
             </div>`
           : ''
       }
@@ -784,7 +784,14 @@ function openSheet(type) {
         rels.length
           ? `<div class="detail-block">
               <h3>Relations (${rels.length})</h3>
-              <p>${rels.map((r) => escapeHtml(typeof r === 'string' ? r : JSON.stringify(r))).join(' · ')}</p>
+              <p>${rels
+                .map((r) => {
+                  if (typeof r === 'string') return escapeHtml(r);
+                  const sub = objs.find((o) => o.id === r.subject)?.name || `#${r.subject}`;
+                  const obj = objs.find((o) => o.id === r.object)?.name || `#${r.object}`;
+                  return `${escapeHtml(sub)} → ${escapeHtml(r.predicate || '')} → ${escapeHtml(obj)}`;
+                })
+                .join(' · ')}</p>
             </div>`
           : ''
       }
